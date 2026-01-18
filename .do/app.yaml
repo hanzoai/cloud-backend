@@ -4,10 +4,10 @@ services:
   - name: cloud
     source_dir: /
     github:
-      repo: hanzoai/dev
+      repo: hanzoai/cloud-backend
       branch: main
       deploy_on_push: true
-    dockerfile_path: cloud/Dockerfile
+    dockerfile_path: Dockerfile
     instance_count: 1
     instance_size_slug: basic-xs
     http_port: 8001
