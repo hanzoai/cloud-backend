@@ -3,6 +3,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use pyo3::PyErr;
 use serde_json::json;
 use thiserror::Error;
 
@@ -76,6 +77,12 @@ impl IntoResponse for AppError {
         }));
 
         (status, body).into_response()
+    }
+}
+
+impl From<PyErr> for AppError {
+    fn from(err: PyErr) -> Self {
+        AppError::Grpo(format!("Python error: {}", err))
     }
 }
 

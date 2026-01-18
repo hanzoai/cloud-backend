@@ -1,7 +1,7 @@
 use crate::error::{AppError, Result};
 use crate::models::{ChatMessage, GrpoMetadata};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyModule};
+use pyo3::types::PyList;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tracing::{debug, info, warn};
@@ -40,28 +40,29 @@ impl GrpoManager {
             return Ok(());
         }
 
-        Python::with_gil(|py| {
+        Python::with_gil(|py| -> PyResult<()> {
             // Add zoo-gym to Python path
-            let sys = py.import("sys")
-                .map_err(|e| AppError::Grpo(format!("Failed to import sys: {}", e)))?;
-            let path: &PyList = sys.getattr("path")
-                .map_err(|e| AppError::Grpo(format!("Failed to get sys.path: {}", e)))?
-                .downcast()
-                .map_err(|e| AppError::Grpo(format!("Failed to downcast sys.path: {}", e)))?;
+            let sys = py.import_bound("sys")?;
+            let path = sys.getattr("path")?;
+            let path_list: Bound<'_, PyList> = path.downcast()?;
+            path_list.insert(0, self.zoo_gym_path.to_str().unwrap())?;
 
-            path.insert(0, self.zoo_gym_path.to_str().unwrap())
-                .map_err(|e| AppError::Grpo(format!("Failed to add to sys.path: {}", e)))?;
+            // Try to import zoo-gym modules (optional - may not be available)
+            match py.import_bound("src.gym.train.grpo.experience_manager") {
+                Ok(_) => {
+                    info!("Zoo-gym experience_manager loaded");
+                }
+                Err(e) => {
+                    warn!("Zoo-gym not available, GRPO will use basic mode: {}", e);
+                }
+            }
 
-            // Try to import zoo-gym modules
-            py.import("src.gym.train.grpo.experience_manager")
-                .map_err(|e| AppError::Grpo(format!("Failed to import experience_manager: {}", e)))?;
-            py.import("src.gym.train.grpo.semantic_extractor")
-                .map_err(|e| AppError::Grpo(format!("Failed to import semantic_extractor: {}", e)))?;
-
-            info!("Python interpreter initialized successfully");
             *initialized = true;
             Ok(())
-        })
+        })?;
+
+        info!("Python interpreter initialized");
+        Ok(())
     }
 
     /// Generate responses with GRPO enhancement
@@ -75,101 +76,81 @@ impl GrpoManager {
     ) -> Result<(String, GrpoMetadata)> {
         self.ensure_python_initialized()?;
 
-        Python::with_gil(|py| {
-            // Load experience manager
-            let exp_manager_mod = py.import("src.gym.train.grpo.experience_manager")
-                .map_err(|e| AppError::Grpo(format!("Import error: {}", e)))?;
-            let exp_manager_class = exp_manager_mod.getattr("ExperienceManager")
-                .map_err(|e| AppError::Grpo(format!("Class not found: {}", e)))?;
+        // Load experiences if available
+        let experiences_text = self.load_experiences(model).unwrap_or_default();
 
-            // Create experience manager instance
-            let exp_path = self.experience_lib_path.join(format!("{}_experiences.json", model.replace("/", "_")));
-            let kwargs = PyDict::new(py);
-            kwargs.set_item("checkpoint_path", exp_path.to_str().unwrap())
-                .map_err(|e| AppError::Grpo(format!("Failed to set checkpoint_path: {}", e)))?;
+        // Inject experiences into messages
+        let enhanced_messages = self.inject_experiences(messages, &experiences_text);
 
-            let exp_manager = exp_manager_class.call((), Some(kwargs))
-                .map_err(|e| AppError::Grpo(format!("Failed to create ExperienceManager: {}", e)))?;
+        // Generate multiple rollouts
+        let mut outputs = Vec::new();
+        let mut rewards = Vec::new();
 
-            // Get formatted experiences
-            let experiences_text: String = exp_manager.call_method0("format_for_prompt")
-                .map_err(|e| AppError::Grpo(format!("Failed to format experiences: {}", e)))?
-                .extract()
-                .map_err(|e| AppError::Grpo(format!("Failed to extract experiences: {}", e)))?;
+        for i in 0..self.group_size {
+            debug!("Generating rollout {}/{}", i + 1, self.group_size);
 
-            debug!("Loaded {} experiences",
-                exp_manager.call_method0("__len__")
-                    .and_then(|v| v.extract::<usize>())
-                    .unwrap_or(0)
-            );
+            // Generate response
+            let response = provider_generate(query, &enhanced_messages).await?;
 
-            // Inject experiences into messages
-            let enhanced_messages = self.inject_experiences(messages, &experiences_text);
+            // Compute reward
+            let reward = if let Some(gt) = groundtruth {
+                self.compute_reward(&response, gt)
+            } else {
+                0.5 // Neutral reward without groundtruth
+            };
 
-            // Generate multiple rollouts
-            let rt = tokio::runtime::Handle::current();
-            let mut outputs = Vec::new();
-            let mut rewards = Vec::new();
+            outputs.push(response);
+            rewards.push(reward);
+        }
 
-            for i in 0..self.group_size {
-                debug!("Generating rollout {}/{}", i + 1, self.group_size);
+        // Find best response
+        let best_idx = rewards.iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .map(|(idx, _)| idx)
+            .unwrap_or(0);
 
-                // Generate response
-                let response = rt.block_on(async {
-                    provider_generate(query, &enhanced_messages).await
-                })?;
+        let best_response = outputs[best_idx].clone();
+        let avg_reward: f64 = rewards.iter().sum::<f64>() / rewards.len() as f64;
 
-                // Compute reward (simple for now - could be more sophisticated)
-                let reward = if let Some(gt) = groundtruth {
-                    self.compute_reward(&response, gt)
-                } else {
-                    0.5 // Neutral reward without groundtruth
-                };
+        // If rewards vary, extract semantic advantages
+        let rewards_vary = rewards.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()
+            != rewards.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
 
-                outputs.push(response);
-                rewards.push(reward);
-            }
+        if rewards_vary {
+            debug!("Rewards vary, could extract semantic advantages");
+            // TODO: Implement semantic extraction when zoo-gym is available
+        }
 
-            // Find best response
-            let best_idx = rewards.iter()
-                .enumerate()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                .map(|(idx, _)| idx)
-                .unwrap_or(0);
+        Ok((
+            best_response,
+            GrpoMetadata {
+                experiences_used: self.parse_experience_ids(&experiences_text),
+                group_size: self.group_size,
+                best_reward: rewards[best_idx],
+                avg_reward,
+            },
+        ))
+    }
 
-            let best_response = outputs[best_idx].clone();
-            let avg_reward: f64 = rewards.iter().sum::<f64>() / rewards.len() as f64;
+    /// Load experiences from file (simplified)
+    fn load_experiences(&self, model: &str) -> Result<String> {
+        let exp_path = self.experience_lib_path.join(format!("{}_experiences.json", model.replace('/', "_")));
 
-            // If rewards vary, extract semantic advantages
-            let rewards_vary = rewards.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()
-                != rewards.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
-
-            if rewards_vary {
-                debug!("Rewards vary, extracting semantic advantages");
-                self.extract_and_update_experiences(
-                    py,
-                    query,
-                    &outputs,
-                    &rewards,
-                    groundtruth,
-                    &exp_manager,
-                )?;
-            }
-
-            Ok((
-                best_response,
-                GrpoMetadata {
-                    experiences_used: self.parse_experience_ids(&experiences_text),
-                    group_size: self.group_size,
-                    best_reward: rewards[best_idx],
-                    avg_reward,
-                },
-            ))
-        })
+        if exp_path.exists() {
+            std::fs::read_to_string(&exp_path)
+                .map_err(|e| AppError::Grpo(format!("Failed to load experiences: {}", e)))
+        } else {
+            Ok(String::new())
+        }
     }
 
     /// Inject experiences into messages
     fn inject_experiences(&self, messages: &[ChatMessage], experiences: &str) -> Vec<ChatMessage> {
+        if experiences.is_empty() {
+            return messages.to_vec();
+        }
+
         let mut enhanced = vec![ChatMessage {
             role: "system".to_string(),
             content: format!(
@@ -183,7 +164,6 @@ impl GrpoManager {
 
     /// Compute reward for a response
     fn compute_reward(&self, response: &str, groundtruth: &str) -> f64 {
-        // Simple similarity-based reward (could be improved with more sophisticated metrics)
         let response_lower = response.to_lowercase();
         let gt_lower = groundtruth.to_lowercase();
 
@@ -204,80 +184,6 @@ impl GrpoManager {
         }
     }
 
-    /// Extract semantic advantages and update experience library
-    fn extract_and_update_experiences(
-        &self,
-        py: Python,
-        query: &str,
-        outputs: &[String],
-        rewards: &[f64],
-        groundtruth: Option<&str>,
-        exp_manager: &PyAny,
-    ) -> Result<()> {
-        // Import semantic extractor
-        let semantic_mod = py.import("src.gym.train.grpo.semantic_extractor")
-            .map_err(|e| AppError::Grpo(format!("Import error: {}", e)))?;
-        let trajectory_class = semantic_mod.getattr("Trajectory")
-            .map_err(|e| AppError::Grpo(format!("Class not found: {}", e)))?;
-        let extractor_class = semantic_mod.getattr("SemanticExtractor")
-            .map_err(|e| AppError::Grpo(format!("Class not found: {}", e)))?;
-
-        // Create dummy LLM client (TODO: integrate real API)
-        let llm_client = py.None();
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("max_operations", self.max_operations)?;
-
-        let extractor = extractor_class.call((llm_client,), Some(kwargs))
-            .map_err(|e| AppError::Grpo(format!("Failed to create SemanticExtractor: {}", e)))?;
-
-        // Create trajectories
-        let trajectories = PyList::empty(py);
-        for (output, &reward) in outputs.iter().zip(rewards.iter()) {
-            let traj_kwargs = PyDict::new(py);
-            traj_kwargs.set_item("query", query)?;
-            traj_kwargs.set_item("output", output)?;
-            traj_kwargs.set_item("reward", reward)?;
-            if let Some(gt) = groundtruth {
-                traj_kwargs.set_item("groundtruth", gt)?;
-            }
-
-            let traj = trajectory_class.call((), Some(traj_kwargs))?;
-            trajectories.append(traj)?;
-        }
-
-        // Get formatted experiences
-        let experiences_text: String = exp_manager.call_method0("format_for_prompt")?.extract()?;
-
-        // Extract group advantage
-        let operations_list: Vec<std::collections::HashMap<String, serde_json::Value>> = extractor
-            .call_method("extract_group_advantage", (trajectories, experiences_text, true), None)
-            .and_then(|ops| ops.extract())
-            .unwrap_or_default();
-
-        if !operations_list.is_empty() {
-            info!("Applying {} operations to experience library", operations_list.len());
-
-            // Convert to Python list
-            let ops_py = PyList::new(py, operations_list.iter().map(|op| {
-                let dict = PyDict::new(py);
-                for (k, v) in op {
-                    dict.set_item(k, v.to_string()).ok();
-                }
-                dict
-            }));
-
-            exp_manager.call_method("apply_operations", (ops_py,), None)
-                .map_err(|e| AppError::Grpo(format!("Failed to apply operations: {}", e)))?;
-
-            // Save experiences
-            let exp_path = self.experience_lib_path.join("experiences.json");
-            exp_manager.call_method("save", (exp_path.to_str().unwrap(),), None)
-                .map_err(|e| AppError::Grpo(format!("Failed to save experiences: {}", e)))?;
-        }
-
-        Ok(())
-    }
-
     /// Parse experience IDs from formatted text
     fn parse_experience_ids(&self, experiences_text: &str) -> Vec<String> {
         experiences_text
@@ -295,22 +201,19 @@ impl GrpoManager {
 
     /// List all experiences for a model
     pub fn list_experiences(&self, model: &str) -> Result<Vec<(String, String)>> {
-        self.ensure_python_initialized()?;
+        let exp_path = self.experience_lib_path.join(format!("{}_experiences.json", model.replace('/', "_")));
 
-        Python::with_gil(|py| {
-            let exp_manager_mod = py.import("src.gym.train.grpo.experience_manager")?;
-            let exp_manager_class = exp_manager_mod.getattr("ExperienceManager")?;
+        if exp_path.exists() {
+            let content = std::fs::read_to_string(&exp_path)
+                .map_err(|e| AppError::Grpo(format!("Failed to read experiences: {}", e)))?;
 
-            let exp_path = self.experience_lib_path.join(format!("{}_experiences.json", model.replace("/", "_")));
-            let kwargs = PyDict::new(py);
-            kwargs.set_item("checkpoint_path", exp_path.to_str().unwrap())?;
+            // Parse as simple JSON
+            let experiences: std::collections::HashMap<String, String> = serde_json::from_str(&content)
+                .unwrap_or_default();
 
-            let exp_manager = exp_manager_class.call((), Some(kwargs))?;
-            let experiences_dict: std::collections::HashMap<String, String> = exp_manager
-                .getattr("experiences")?
-                .extract()?;
-
-            Ok(experiences_dict.into_iter().collect())
-        }).map_err(|e: PyErr| AppError::Grpo(format!("Python error: {}", e)))
+            Ok(experiences.into_iter().collect())
+        } else {
+            Ok(Vec::new())
+        }
     }
 }
