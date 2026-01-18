@@ -4,6 +4,11 @@ FROM rustlang/rust:nightly as builder
 # Allow PyO3 to work with Python 3.13+
 ENV PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 
+# Install Python development libraries for PyO3 linking
+RUN apt-get update && apt-get install -y \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy dependency manifests and source
