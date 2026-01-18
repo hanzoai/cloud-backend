@@ -44,9 +44,6 @@ chrono = { version = "0.4", features = ["serde"] }
 # Python integration for GRPO
 pyo3 = { version = "0.20", features = ["auto-initialize"] }
 
-# Pin home crate to avoid edition2024 requirement
-home = "=0.5.9"
-
 [profile.release]
 opt-level = 3
 lto = true
