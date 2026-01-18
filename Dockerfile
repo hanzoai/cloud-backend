@@ -1,6 +1,9 @@
 # Build stage - using nightly for edition2024 support
 FROM rustlang/rust:nightly as builder
 
+# Allow PyO3 to work with Python 3.13+
+ENV PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+
 WORKDIR /app
 
 # Copy dependency manifests
