@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: hanzo_cloud
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  cloud:
+    build: .
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/hanzo_cloud
+      - REDIS_URL=redis://redis:6379
+      - CLOUD_HOST=0.0.0.0
+      - CLOUD_PORT=8001
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DIGITALOCEAN_API_KEY=${DIGITALOCEAN_API_KEY}
+      - ZOO_GYM_PATH=/zoo-gym
+      - EXPERIENCE_LIB_PATH=/app/experiences
+      - GRPO_ENABLED=true
+      - GRPO_GROUP_SIZE=5
+      - GRPO_MAX_OPERATIONS=3
+      - RUST_LOG=hanzo_cloud=debug,tower_http=debug
+    volumes:
+      - experiences_data:/app/experiences
+      - ${ZOO_GYM_PATH:-../zoo/gym}:/zoo-gym:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  experiences_data:

@@ -1,0 +1,86 @@
+name: hanzo-cloud
+region: nyc
+services:
+  - name: cloud
+    source_dir: /
+    github:
+      repo: hanzoai/dev
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: cloud/Dockerfile
+    instance_count: 1
+    instance_size_slug: basic-xs
+    http_port: 8001
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    envs:
+      - key: CLOUD_HOST
+        value: "0.0.0.0"
+      - key: CLOUD_PORT
+        value: "8001"
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: REDIS_URL
+        scope: RUN_TIME
+        value: ${redis.REDIS_URL}
+      - key: JWT_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: STRIPE_SECRET_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: STRIPE_PUBLISHABLE_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: STRIPE_WEBHOOK_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: DEEPSEEK_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: OPENAI_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: ANTHROPIC_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: HANZO_ID_URL
+        value: "https://hanzo.id"
+      - key: HANZO_ID_CLIENT_ID
+        scope: RUN_TIME
+        type: SECRET
+      - key: HANZO_ID_CLIENT_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: GRPO_ENABLED
+        value: "true"
+      - key: GRPO_GROUP_SIZE
+        value: "5"
+      - key: GRPO_MAX_OPERATIONS
+        value: "3"
+      - key: RUST_LOG
+        value: "hanzo_cloud=info,tower_http=info"
+
+databases:
+  - name: db
+    engine: PG
+    version: "16"
+    size: db-s-dev-database
+    num_nodes: 1
+
+  - name: redis
+    engine: REDIS
+    version: "7"
+    size: db-s-dev-database
+    num_nodes: 1
+
+domains:
+  - domain: cloud.hanzo.ai
+    type: PRIMARY
+    zone: hanzo.ai

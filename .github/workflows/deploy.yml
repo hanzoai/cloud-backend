@@ -1,0 +1,40 @@
+name: Deploy Cloud to DigitalOcean App Platform
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'cloud/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Deploy to DigitalOcean App Platform
+        run: |
+          # Check if app exists
+          if doctl apps list --format ID,Spec.Name --no-header | grep -q "hanzo-cloud"; then
+            echo "Updating existing app..."
+            APP_ID=$(doctl apps list --format ID,Spec.Name --no-header | grep "hanzo-cloud" | awk '{print $1}')
+            doctl apps update $APP_ID --spec cloud/.do/app.yaml
+          else
+            echo "Creating new app..."
+            doctl apps create --spec cloud/.do/app.yaml
+          fi
+
+      - name: Wait for deployment
+        run: |
+          APP_ID=$(doctl apps list --format ID,Spec.Name --no-header | grep "hanzo-cloud" | awk '{print $1}')
+          echo "Waiting for deployment to complete..."
+          sleep 30
+          doctl apps get $APP_ID --format DefaultIngress
