@@ -19,19 +19,18 @@ COPY migrations ./migrations
 # Build for release
 RUN cargo build --release
 
-# Runtime stage
-FROM debian:bookworm-slim
+# Runtime stage - use trixie for Python 3.13 compatibility
+FROM debian:trixie-slim
 
 WORKDIR /app
 
-# Install runtime dependencies
+# Install runtime dependencies (trixie has Python 3.13)
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libssl3 \
+    libssl3t64 \
     libpq5 \
     curl \
     python3 \
-    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binary from builder
