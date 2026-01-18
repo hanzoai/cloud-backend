@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y \
     libpq5 \
     curl \
     python3 \
+    libpython3.13 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binary from builder
