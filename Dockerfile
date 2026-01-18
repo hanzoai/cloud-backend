@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:1.75 as builder
+FROM rust:1.84 as builder
 
 WORKDIR /app
 
@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     libpq5 \
+    curl \
     python3 \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
