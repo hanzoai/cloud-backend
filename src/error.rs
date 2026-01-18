@@ -41,6 +41,20 @@ pub enum AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        // Capture error type before match consumes self
+        let error_type = match &self {
+            AppError::Auth(_) => "Auth",
+            AppError::Database(_) => "Database",
+            AppError::Redis(_) => "Redis",
+            AppError::Provider(_) => "Provider",
+            AppError::Grpo(_) => "Grpo",
+            AppError::InsufficientCredits => "InsufficientCredits",
+            AppError::RateLimit => "RateLimit",
+            AppError::BadRequest(_) => "BadRequest",
+            AppError::NotFound(_) => "NotFound",
+            AppError::Internal(_) => "Internal",
+        };
+
         let (status, error_message) = match self {
             AppError::Auth(msg) => (StatusCode::UNAUTHORIZED, msg),
             AppError::InsufficientCredits => (StatusCode::PAYMENT_REQUIRED, "Insufficient credits".to_string()),
@@ -57,7 +71,7 @@ impl IntoResponse for AppError {
         let body = Json(json!({
             "error": {
                 "message": error_message,
-                "type": format!("{:?}", self),
+                "type": error_type,
             }
         }));
 
