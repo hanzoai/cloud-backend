@@ -50,7 +50,8 @@ pub async fn chat_completions(
     }
 
     // Get provider for model
-    let provider = Provider::from_model(&req.model, &state.config)?;
+    let model_name = req.model.clone();
+    let provider = Provider::from_model(&model_name, &state.config)?;
 
     // Generate response (with or without GRPO)
     let response = if req.grpo_enabled && state.config.grpo_enabled {
@@ -85,7 +86,7 @@ pub async fn chat_completions(
     )
     .bind(Uuid::new_v4())
     .bind(&user_id)
-    .bind(&req.model)
+    .bind(&model_name)
     .bind(response.usage.prompt_tokens)
     .bind(response.usage.completion_tokens)
     .bind(response.usage.total_tokens)

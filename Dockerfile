@@ -6,9 +6,10 @@ ENV PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 
 WORKDIR /app
 
-# Copy dependency manifests
+# Copy dependency manifests and source
 COPY Cargo.toml ./
 COPY src ./src
+COPY migrations ./migrations
 
 # Build for release
 RUN cargo build --release

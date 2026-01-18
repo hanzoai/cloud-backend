@@ -42,13 +42,12 @@ impl GrpoManager {
 
         Python::with_gil(|py| -> PyResult<()> {
             // Add zoo-gym to Python path
-            let sys = py.import_bound("sys")?;
-            let path = sys.getattr("path")?;
-            let path_list: Bound<'_, PyList> = path.downcast()?;
-            path_list.insert(0, self.zoo_gym_path.to_str().unwrap())?;
+            let sys = py.import("sys")?;
+            let path: &PyList = sys.getattr("path")?.downcast()?;
+            path.insert(0, self.zoo_gym_path.to_str().unwrap())?;
 
             // Try to import zoo-gym modules (optional - may not be available)
-            match py.import_bound("src.gym.train.grpo.experience_manager") {
+            match py.import("src.gym.train.grpo.experience_manager") {
                 Ok(_) => {
                     info!("Zoo-gym experience_manager loaded");
                 }
