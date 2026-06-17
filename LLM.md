@@ -1,4 +1,4 @@
-# LLM.md - Hanzo Cloud Backend
+# Hanzo Cloud Backend
 
 ## Overview
 Production-grade Rust backend for Hanzo AI cloud services with Training-Free GRPO integration.
