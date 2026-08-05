@@ -326,4 +326,4 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md)
 
 - Documentation: https://docs.hanzo.ai
 - Issues: https://github.com/hanzoai/dev/issues
-- Discord: https://discord.gg/hanzoai
+- Discord: https://discord.gg/CJCyAsm9Vr
